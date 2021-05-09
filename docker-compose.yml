@@ -1,0 +1,58 @@
+# Author: Glen Adams
+version: '3.8'
+
+services:
+    db:
+        container_name: "db"
+        image: postgres
+        build: ./db-setup
+        ports:
+          # 15432 used for external apps, docker containers still communicate over 5432
+          - "15432:5432"
+        volumes:
+          - db:/var/lib/postgresql/data/
+          - ./db-setup/init:/docker-entrypoint-initdb.d/
+        environment:
+          - POSTGRES_USER=geog670
+          - POSTGRES_PASSWORD=gadams
+          - POSTGRES_DB=usgsdb
+          - POSTGRES_MULTIPLE_DATABASES=
+          - TZ=America/New_York
+        restart: always
+    python:
+        container_name: python
+        build: ./python
+        volumes:
+            - ./python:/python
+        environment:
+            - PYTHONUNBUFFERED=1
+            - POSTGRES_SERVER=db
+            - POSTGRES_PORT=5432
+            - POSTGRES_USER=geog670
+            - POSTGRES_PASSWORD=gadams
+            - POSTGRES_DB=usgsdb
+            - TZ=America/New_York
+        restart: always
+        depends_on:
+            - db
+    geoserver:
+        container_name: geoserver
+        image: kartoza/geoserver
+        build: ./geoserver
+        volumes:
+        #   - ./geoserver/geoserver-data:/opt/geoserver/data_dir Not needed, we are exclusively using the db container
+        ports:
+            - "8600:8080"
+        restart: always
+        environment:
+            # - GEOSERVER_DATA_DIR=${GEOSERVER_DATA_DIR}
+            # - GEOWEBCACHE_CACHE_DIR=${GEOWEBCACHE_CACHE_DIR}
+            - GEOSERVER_ADMIN_USER=geog670
+            - GEOSERVER_ADMIN_PASSWORD=gadams
+            - INITIAL_MEMORY=2G
+            - MAXIMUM_MEMORY=4G
+        depends_on:
+            - db
+volumes:
+    db:
+        driver: local

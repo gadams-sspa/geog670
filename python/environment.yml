@@ -1,0 +1,10 @@
+# Author: Glen Adams
+name: python3_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.8
+  - pandas
+  - geopandas
+  - sqlalchemy
+  - psycopg2
