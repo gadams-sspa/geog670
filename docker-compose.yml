@@ -5,18 +5,22 @@ services:
     db:
         container_name: "db"
         image: postgres
-        build: ./db-setup
+        build:
+            context: ./db
+            args:
+                numcpu: 4
         ports:
           # 15432 used for external apps, docker containers still communicate over 5432
           - "15432:5432"
         volumes:
           - db:/var/lib/postgresql/data/
-          - ./db-setup/init:/docker-entrypoint-initdb.d/
+          - ./db/init:/docker-entrypoint-initdb.d/
         environment:
           - POSTGRES_USER=geog670
           - POSTGRES_PASSWORD=gadams
           - POSTGRES_DB=usgsdb
-          - POSTGRES_MULTIPLE_DATABASES=
+          - POSTGRES_MULTIPLE_DATABASES=usgsdb
+          - PASSWORD=gadams
           - TZ=America/New_York
         restart: always
     python:
@@ -31,15 +35,15 @@ services:
             - POSTGRES_USER=geog670
             - POSTGRES_PASSWORD=gadams
             - POSTGRES_DB=usgsdb
+            - RUN_INTERVAL_MIN=1 # DEBUG SET TO 60 AT LEAST
+            - PARALLEL_FACTOR=0.5
             - TZ=America/New_York
-        restart: always
-        depends_on:
-            - db
+        restart: on-failure
     geoserver:
         container_name: geoserver
         image: kartoza/geoserver
         build: ./geoserver
-        volumes:
+        # volumes:
         #   - ./geoserver/geoserver-data:/opt/geoserver/data_dir Not needed, we are exclusively using the db container
         ports:
             - "8600:8080"
@@ -51,8 +55,6 @@ services:
             - GEOSERVER_ADMIN_PASSWORD=gadams
             - INITIAL_MEMORY=2G
             - MAXIMUM_MEMORY=4G
-        depends_on:
-            - db
 volumes:
     db:
         driver: local

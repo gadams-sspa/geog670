@@ -12,4 +12,4 @@ ENV PATH /opt/conda/envs/python3_env/bin:$PATH
 RUN /bin/bash -c "source activate python3_env"
 
 # The code to run when container is started:
-CMD ["python", "/scripts/RealtimeDataUpdate.py"]
+CMD ["python", "/python/scripts/RealtimeDataUpdate.py"]

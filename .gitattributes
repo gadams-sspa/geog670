@@ -1,0 +1,1 @@
+./db/init/create_db.sh eol=lf
