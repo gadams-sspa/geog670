@@ -14,7 +14,7 @@ services:
           - "15432:5432"
         volumes:
           - db:/var/lib/postgresql/data/
-          - ./db/init:/docker-entrypoint-initdb.d/
+        #   - ./db/init:/docker-entrypoint-initdb.d/
         environment:
           - POSTGRES_USER=geog670
           - POSTGRES_PASSWORD=gadams
@@ -35,7 +35,7 @@ services:
             - POSTGRES_USER=geog670
             - POSTGRES_PASSWORD=gadams
             - POSTGRES_DB=usgsdb
-            - RUN_INTERVAL_MIN=1 # DEBUG SET TO 60 AT LEAST
+            - RUN_INTERVAL_MIN=0.5 # DEBUG SET TO 60 AT LEAST
             - PARALLEL_FACTOR=0.5
             - TZ=America/New_York
         restart: on-failure

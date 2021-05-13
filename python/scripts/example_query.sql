@@ -1,12 +1,11 @@
--- Adjust to accept PostGIS geometry
-select st_geomfromtext(geom, 4269)
+select val, st_geomfromtext(geom, 4269) AS geom
 from test_plr(
 	$$select ST_X(geom) as x, ST_Y(geom) as y, AVG(depth_towl_ft) as z, datetime
-			from realtime_test.usgs_wl_data
+			from public.usgs_wl_data
       where 
 (	   (datetime, datetime)
 		OVERLAPS 
-	  ( TO_TIMESTAMP('2020-03-06 09:15:00', 'YYYY-MM-DD HH24:MI:SS' ), interval '7.5 minutes' )
+	  ( TO_TIMESTAMP('2021-05-12 22:00:00', 'YYYY-MM-DD HH24:MI:SS' ), interval '5 minutes' )
 )
 GROUP BY x, y, datetime
 	  $$

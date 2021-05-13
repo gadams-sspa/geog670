@@ -1,6 +1,7 @@
--- Adjust to return actual geometry
-CREATE OR REPLACE FUNCTION test_plr(query text)
-RETURNS setof text AS $$
+CREATE OR REPLACE FUNCTION public.test_plr(query text)
+ RETURNS SETOF contour
+ LANGUAGE plr
+AS $function$
 
 library(gstat)
 library(raster)
@@ -60,8 +61,10 @@ contours_sf = st_as_sf(pred_contours_SpatialLines)
 ## convert sf to data.table
 contours_dt = as.data.table(contours_sf)
 
+##convert geometry to WKT
+contours_dt[,geometry:=st_as_text(geometry)]
 
 ## return if you define as an R function
-return(st_as_text(contours_dt))
+return(contours_dt[,.(val=z,geom=geometry)])
 
-$$ LANGUAGE plr;
+$function$;

@@ -2,263 +2,242 @@
 # Used these Docker files as reference
 # https://github.com/rocker-org/rocker-versioned/blob/master/r-ver/3.6.3.Dockerfile
 # https://github.com/rocker-org/geospatial/blob/master/Dockerfile
-# https://github.com/r-spatial/sf/
-# https://github.com/r-spatial/sf/blob/master/inst/docker/base/Dockerfile
-FROM postgis/postgis:13-master
+# https://github.com/docker-library/postgres/blob/master/13/Dockerfile
+# https://github.com/postgis/docker-postgis/blob/master/13-3.1/Dockerfile
+FROM rocker/geospatial:3.6.3
 
-ARG R_VERSION
-ARG BUILD_DATE
-ARG CRAN
-ENV BUILD_DATE ${BUILD_DATE:-2020-04-24}
-ENV R_VERSION=${R_VERSION:-3.6.3} \
-    CRAN=${CRAN:-https://cran.rstudio.com} \ 
-    LC_ALL=en_US.UTF-8 \
-    LANG=en_US.UTF-8 \
-    TERM=xterm
-RUN locale-gen en_US.UTF-8
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
-  
+RUN set -ex; \
+	if ! command -v gpg > /dev/null; then \
+		apt-get update; \
+		apt-get install -y --no-install-recommends \
+			gnupg \
+			dirmngr \
+		; \
+		rm -rf /var/lib/apt/lists/*; \
+	fi
 
+
+# explicitly set user/group IDs
+RUN set -eux; \
+	groupadd -r postgres --gid=998; \
+# https://salsa.debian.org/postgresql/postgresql-common/blob/997d842ee744687d99a2b2d95c1083a2615c79e8/debian/postgresql-common.postinst#L32-35
+	useradd -r -g postgres --uid=998 --home-dir=/var/lib/postgresql --shell=/bin/bash postgres; \
+# also create the postgres user's home directory with appropriate permissions
+# see https://github.com/docker-library/postgres/issues/274
+	mkdir -p /var/lib/postgresql; \
+	chown -R postgres:postgres /var/lib/postgresql
+
+# grab gosu for easy step-down from root
+# https://github.com/tianon/gosu/releases
+ENV GOSU_VERSION 1.12
+RUN set -eux; \
+	savedAptMark="$(apt-mark showmanual)"; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends ca-certificates wget; \
+	rm -rf /var/lib/apt/lists/*; \
+	dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
+	wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch"; \
+	wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch.asc"; \
+	export GNUPGHOME="$(mktemp -d)"; \
+	gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4; \
+	gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu; \
+	gpgconf --kill all; \
+	rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc; \
+	apt-mark auto '.*' > /dev/null; \
+	[ -z "$savedAptMark" ] || apt-mark manual $savedAptMark > /dev/null; \
+	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
+	chmod +x /usr/local/bin/gosu; \
+	gosu --version; \
+	gosu nobody true
+
+# make the "en_US.UTF-8" locale so postgres will be utf-8 enabled by default
+RUN set -eux; \
+	if [ -f /etc/dpkg/dpkg.cfg.d/docker ]; then \
+# if this file exists, we're likely in "debian:xxx-slim", and locales are thus being excluded so we need to remove that exclusion (since we need locales)
+		grep -q '/usr/share/locale' /etc/dpkg/dpkg.cfg.d/docker; \
+		sed -ri '/\/usr\/share\/locale/d' /etc/dpkg/dpkg.cfg.d/docker; \
+		! grep -q '/usr/share/locale' /etc/dpkg/dpkg.cfg.d/docker; \
+	fi; \
+	apt-get update; apt-get install -y --no-install-recommends locales; rm -rf /var/lib/apt/lists/*; \
+	localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+ENV LANG en_US.utf8
+
+RUN set -eux; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends \
+# install "nss_wrapper" in case we need to fake "/etc/passwd" and "/etc/group" (especially for OpenShift)
+# https://github.com/docker-library/postgres/issues/359
+# https://cwrap.org/nss_wrapper.html
+		libnss-wrapper \
+# install "xz-utils" for .sql.xz docker-entrypoint-initdb.d files
+		xz-utils \
+	; \
+	rm -rf /var/lib/apt/lists/*
+
+RUN mkdir /docker-entrypoint-initdb.d
+
+RUN set -ex; \
+# pub   4096R/ACCC4CF8 2011-10-13 [expires: 2019-07-02]
+#       Key fingerprint = B97B 0AFC AA1A 47F0 44F2  44A0 7FCC 7D46 ACCC 4CF8
+# uid                  PostgreSQL Debian Repository
+	key='B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8'; \
+	export GNUPGHOME="$(mktemp -d)"; \
+	gpg --batch --keyserver ha.pool.sks-keyservers.net --recv-keys "$key"; \
+	gpg --batch --export "$key" > /etc/apt/trusted.gpg.d/postgres.gpg; \
+	command -v gpgconf > /dev/null && gpgconf --kill all; \
+	rm -rf "$GNUPGHOME"; \
+	apt-key list
+
+ENV PG_MAJOR 13
+ENV PG_VERSION 13.2-1.pgdg100+1
+
+RUN set -ex; \
+	\
+# see note below about "*.pyc" files
+	export PYTHONDONTWRITEBYTECODE=1; \
+	\
+	dpkgArch="$(dpkg --print-architecture)"; \
+	case "$dpkgArch" in \
+		amd64 | arm64 | i386 | ppc64el) \
+# arches officialy built by upstream
+			echo "deb http://apt.postgresql.org/pub/repos/apt/ buster-pgdg main $PG_MAJOR" > /etc/apt/sources.list.d/pgdg.list; \
+			apt-get update; \
+			;; \
+		*) \
+# we're on an architecture upstream doesn't officially build for
+# let's build binaries from their published source packages
+			echo "deb-src http://apt.postgresql.org/pub/repos/apt/ buster-pgdg main $PG_MAJOR" > /etc/apt/sources.list.d/pgdg.list; \
+			\
+			case "$PG_MAJOR" in \
+				9.* | 10 ) ;; \
+				*) \
+# https://github.com/docker-library/postgres/issues/484 (clang-6.0 required, only available in stretch-backports)
+# TODO remove this once we hit buster+
+					echo 'deb http://deb.debian.org/debian buster-backports main' >> /etc/apt/sources.list.d/pgdg.list; \
+					;; \
+			esac; \
+			\
+			tempDir="$(mktemp -d)"; \
+			cd "$tempDir"; \
+			\
+			savedAptMark="$(apt-mark showmanual)"; \
+			\
+# build .deb files from upstream's source packages (which are verified by apt-get)
+			apt-get update; \
+# we need DEBIAN_FRONTEND on postgresql-13 for slapd ("Please enter the password for the admin entry in your LDAP directory."); see https://bugs.debian.org/929417
+			DEBIAN_FRONTEND=noninteractive \
+			apt-get build-dep -y \
+				postgresql-common pgdg-keyring \
+				"postgresql-$PG_MAJOR" \
+			; \
+			DEB_BUILD_OPTIONS="nocheck parallel=$(nproc)" \
+				apt-get source --compile \
+					postgresql-common pgdg-keyring \
+					"postgresql-$PG_MAJOR" \
+			; \
+# we don't remove APT lists here because they get re-downloaded and removed later
+			\
+# reset apt-mark's "manual" list so that "purge --auto-remove" will remove all build dependencies
+# (which is done after we install the built packages so we don't have to redownload any overlapping dependencies)
+			apt-mark showmanual | xargs apt-mark auto > /dev/null; \
+			apt-mark manual $savedAptMark; \
+			\
+# create a temporary local APT repo to install from (so that dependency resolution can be handled by APT, as it should be)
+			ls -lAFh; \
+			dpkg-scanpackages . > Packages; \
+			grep '^Package: ' Packages; \
+			echo "deb [ trusted=yes ] file://$tempDir ./" > /etc/apt/sources.list.d/temp.list; \
+# work around the following APT issue by using "Acquire::GzipIndexes=false" (overriding "/etc/apt/apt.conf.d/docker-gzip-indexes")
+#   Could not open file /var/lib/apt/lists/partial/_tmp_tmp.ODWljpQfkE_._Packages - open (13: Permission denied)
+#   ...
+#   E: Failed to fetch store:/var/lib/apt/lists/partial/_tmp_tmp.ODWljpQfkE_._Packages  Could not open file /var/lib/apt/lists/partial/_tmp_tmp.ODWljpQfkE_._Packages - open (13: Permission denied)
+			apt-get -o Acquire::GzipIndexes=false update; \
+			;; \
+	esac; \
+	\
+	apt-get install -y --no-install-recommends postgresql-common; \
+	sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf; \
+	apt-get install -y --no-install-recommends \
+		"postgresql-$PG_MAJOR" \
+	; \
+	\
+	rm -rf /var/lib/apt/lists/*; \
+	\
+	if [ -n "$tempDir" ]; then \
+# if we have leftovers from building, let's purge them (including extra, unnecessary build deps)
+		apt-get purge -y --auto-remove; \
+		rm -rf "$tempDir" /etc/apt/sources.list.d/temp.list; \
+	fi; \
+	\
+# some of the steps above generate a lot of "*.pyc" files (and setting "PYTHONDONTWRITEBYTECODE" beforehand doesn't propagate properly for some reason), so we clean them up manually (as long as they aren't owned by a package)
+	find /usr -name '*.pyc' -type f -exec bash -c 'for pyc; do dpkg -S "$pyc" &> /dev/null || rm -vf "$pyc"; done' -- '{}' +
+
+# make the sample config easier to munge (and "correct by default")
+RUN set -eux; \
+	dpkg-divert --add --rename --divert "/usr/share/postgresql/postgresql.conf.sample.dpkg" "/usr/share/postgresql/$PG_MAJOR/postgresql.conf.sample"; \
+	cp -v /usr/share/postgresql/postgresql.conf.sample.dpkg /usr/share/postgresql/postgresql.conf.sample; \
+	ln -sv ../postgresql.conf.sample "/usr/share/postgresql/$PG_MAJOR/"; \
+	sed -ri "s!^#?(listen_addresses)\s*=\s*\S+.*!\1 = '*'!" /usr/share/postgresql/postgresql.conf.sample; \
+	grep -F "listen_addresses = '*'" /usr/share/postgresql/postgresql.conf.sample
+
+RUN mkdir -p /var/run/postgresql && chown -R postgres:postgres /var/run/postgresql && chmod 2777 /var/run/postgresql
+
+ENV PATH $PATH:/usr/lib/postgresql/$PG_MAJOR/bin
+ENV PGDATA /var/lib/postgresql/data
+# this 777 will be replaced by 700 at runtime (allows semi-arbitrary "--user" values)
+RUN mkdir -p "$PGDATA" && chown -R postgres:postgres "$PGDATA" && chmod 777 "$PGDATA"
+VOLUME /var/lib/postgresql/data
+
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN ln -s usr/local/bin/docker-entrypoint.sh / # backwards compat
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+# We set the default STOPSIGNAL to SIGINT, which corresponds to what PostgreSQL
+# calls "Fast Shutdown mode" wherein new connections are disallowed and any
+# in-progress transactions are aborted, allowing PostgreSQL to stop cleanly and
+# flush tables to disk, which is the best compromise available to avoid data
+# corruption.
+#
+# Users who know their applications do not keep open long-lived idle connections
+# may way to use a value of SIGTERM instead, which corresponds to "Smart
+# Shutdown mode" in which any existing sessions are allowed to finish and the
+# server stops when all sessions are terminated.
+#
+# See https://www.postgresql.org/docs/12/server-shutdown.html for more details
+# about available PostgreSQL server shutdown signals.
+#
+# See also https://www.postgresql.org/docs/12/server-start.html for further
+# justification of this as the default value, namely that the example (and
+# shipped) systemd service files use the "Fast Shutdown mode" for service
+# termination.
+#
+STOPSIGNAL SIGINT
+#
+# An additional setting that is recommended for all users regardless of this
+# value is the runtime "--stop-timeout" (or your orchestrator/runtime's
+# equivalent) for controlling how long to wait between sending the defined
+# STOPSIGNAL and sending SIGKILL (which is likely to cause data corruption).
+#
+# The default in most runtimes (such as Docker) is 10 seconds, and the
+# documentation at https://www.postgresql.org/docs/12/server-start.html notes
+# that even 90 seconds may not be long enough in many instances.
+
+EXPOSE 5432
+
+ENV POSTGIS_MAJOR 3
+ENV R_HOME /usr/local/lib/R
+ENV LD_LIBRARY_PATH $R_HOME/lib
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    bash-completion \
-    ca-certificates \
-    file \
-    fonts-texgyre \
-    g++ \
-    gfortran \
-    gsfonts \
-    libblas-dev \
-    libbz2-1.0 \
-    libcurl4 \
-    libicu63 \
-    libjpeg62-turbo \
-    libopenblas-dev \
-    libpangocairo-1.0-0 \
-    libpcre3 \
-    libpng16-16 \
-    libreadline7 \
-    libtiff5 \
-    liblzma5 \
-    locales \
-    make \
-    unzip \
-    zip \
-    zlib1g \
-  && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
-  && locale-gen en_US.utf8 \
-  && /usr/sbin/update-locale LANG=en_US.UTF-8 \
-  && BUILDDEPS="curl \
-    default-jdk \
-    libbz2-dev \
-    libcairo2-dev \
-    libcurl4-openssl-dev \
-    libpango1.0-dev \
-    libjpeg-dev \
-    libicu-dev \
-    libpcre3-dev \
-    libpng-dev \
-    libreadline-dev \
-    libtiff5-dev \
-    liblzma-dev \
-    libx11-dev \
-    libxt-dev \
-    perl \
-    tcl8.6-dev \
-    tk8.6-dev \
-    texinfo \
-    texlive-extra-utils \
-    texlive-fonts-recommended \
-    texlive-fonts-extra \
-    texlive-latex-recommended \
-    x11proto-core-dev \
-    xauth \
-    xfonts-base \
-    xvfb \
-    zlib1g-dev" \
-  && apt-get install -y --no-install-recommends $BUILDDEPS \
-  && cd tmp/ \
-  ## Download source code
-  && curl -O https://cran.r-project.org/src/base/R-3/R-${R_VERSION}.tar.gz \
-  ## Extract source code
-  && tar -xf R-${R_VERSION}.tar.gz \
-  && cd R-${R_VERSION} \
-  ## Set compiler flags
-  && R_PAPERSIZE=letter \
-    R_BATCHSAVE="--no-save --no-restore" \
-    R_BROWSER=xdg-open \
-    PAGER=/usr/bin/pager \
-    PERL=/usr/bin/perl \
-    R_UNZIPCMD=/usr/bin/unzip \
-    R_ZIPCMD=/usr/bin/zip \
-    R_PRINTCMD=/usr/bin/lpr \
-    LIBnn=lib \
-    AWK=/usr/bin/awk \
-    CFLAGS="-g -O2 -fstack-protector-strong -Wformat -Werror=format-security -Wdate-time -D_FORTIFY_SOURCE=2 -g" \
-    CXXFLAGS="-g -O2 -fstack-protector-strong -Wformat -Werror=format-security -Wdate-time -D_FORTIFY_SOURCE=2 -g" \
-  ## Configure options
-  ./configure --enable-R-shlib \
-               --enable-memory-profiling \
-               --with-readline \
-               --with-blas \
-               --with-tcltk \
-               --disable-nls \
-               --with-recommended-packages \
-  ## Build and install
-  && make \
-  && make install \
-  ## Add a library directory (for user-installed packages)
-  && mkdir -p /usr/local/lib/R/site-library \
-  && chown root:staff /usr/local/lib/R/site-library \
-  && chmod g+ws /usr/local/lib/R/site-library \
-  ## Fix library path
-  && sed -i '/^R_LIBS_USER=.*$/d' /usr/local/lib/R/etc/Renviron \
-  && echo "R_LIBS_USER=\${R_LIBS_USER-'/usr/local/lib/R/site-library'}" >> /usr/local/lib/R/etc/Renviron \
-  && echo "R_LIBS=\${R_LIBS-'/usr/local/lib/R/site-library:/usr/local/lib/R/library:/usr/lib/R/library'}" >> /usr/local/lib/R/etc/Renviron \
-  ## Set configured CRAN mirror
-  && if [ -z "$BUILD_DATE" ]; then MRAN=$CRAN; \
-   else MRAN=https://mran.microsoft.com/snapshot/${BUILD_DATE}; fi \
-   && echo MRAN=$MRAN >> /etc/environment \
-  && echo "options(repos = c(CRAN='$MRAN'), download.file.method = 'libcurl')" >> /usr/local/lib/R/etc/Rprofile.site \
-  ## Use littler installation scripts
-  && Rscript -e "install.packages(c('littler', 'docopt'), repo = '$CRAN')" \
-  && ln -s /usr/local/lib/R/site-library/littler/examples/install2.r /usr/local/bin/install2.r \
-  && ln -s /usr/local/lib/R/site-library/littler/examples/installGithub.r /usr/local/bin/installGithub.r \
-  && ln -s /usr/local/lib/R/site-library/littler/bin/r /usr/local/bin/r \
-  ## Clean up from R source install
-  && cd / \
-  && rm -rf /tmp/* \
-  && apt-get remove --purge -y $BUILDDEPS \
-  && apt-get autoremove -y \
-  && apt-get autoclean -y \
-  && rm -rf /var/lib/apt/lists/*
+      && apt-cache showpkg postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
+      && apt-get install -y --no-install-recommends \
+           postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
+           postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
+		   postgresql-$PG_MAJOR-plr \
+      && rm -rf /var/lib/apt/lists/*
 
-  RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    lbzip2 \
-    libfftw3-dev \
-    libgdal-dev \
-    libgeos-dev \
-    libgsl0-dev \
-    libgl1-mesa-dev \
-    libglu1-mesa-dev \
-    libhdf4-alt-dev \
-    libhdf5-dev \
-    libjq-dev \
-    liblwgeom-dev \
-    libpq-dev \
-    libproj-dev \
-    libprotobuf-dev \
-    libnetcdf-dev \
-    libsqlite3-dev \
-    libssl-dev \
-    libudunits2-dev \
-    netcdf-bin \
-    postgis \
-    protobuf-compiler \
-    sqlite3 \
-    tk-dev \
-    unixodbc-dev
+RUN mkdir -p /docker-entrypoint-initdb.d
+COPY ./update-postgis.sh /usr/local/bin
+COPY ./init/create_db.sh /docker-entrypoint-initdb.d/create_db.sh
+RUN chmod -x /docker-entrypoint-initdb.d/create_db.sh
 
-RUN install2.r --error \
-    gstat \
-    raster \
-    sf \
-    sp \
-    data.table
-
-# RUN install2.r --error \
-#     RColorBrewer \
-#     RandomFields \
-#     RNetCDF \
-#     classInt \
-#     deldir \
-#     gstat \
-#     hdf5r \
-#     lidR \
-#     mapdata \
-#     maptools \
-#     mapview \
-#     ncdf4 \
-#     proj4 \
-#     raster \
-#     rgdal \
-#     rgeos \
-#     rlas \
-#     sf \
-#     sp \
-#     spacetime \
-#     spatstat \
-#     spdep \
-#     geoR \
-#     geosphere \
-#     data.table
-    # ## from bioconductor
-    # && R -e "BiocManager::install('rhdf5', update=FALSE, ask=FALSE)"
-# ARG numcpu
-
-# Setting up R and PL/R
-# RUN apt-get -y update; apt-get install -y software-properties-common build-essential devscripts
-# RUN add-apt-repository 'deb http://cloud.r-project.org/bin/linux/debian buster-cran40/'
-# RUN apt-key adv --keyserver keys.gnupg.net --recv-key 'E19F5F87128899B192B1A2C2AD5F960A256A04AF'
-# RUN apt-get -y update; apt-get install -y r-base r-base-dev r-recommended postgresql-13-plr
-
-# # Setting up R and PL/R
-# RUN apt-get -y update; apt-get install -y software-properties-common build-essential devscripts
-# RUN add-apt-repository 'deb http://ppa.launchpad.net/ubuntugis/ubuntugis-unstable/ubuntu focal main'
-# RUN apt-key adv --keyserver keys.gnupg.net --recv-key '6B827C12C2D425E227EDCA75089EBE08314DF160'
-# RUN add-apt-repository 'deb http://cloud.r-project.org/bin/linux/debian buster-cran40/'
-# RUN apt-key adv --keyserver keys.gnupg.net --recv-key 'E19F5F87128899B192B1A2C2AD5F960A256A04AF'
-# RUN add-apt-repository 'deb http://ppa.launchpad.net/c2d4u.team/c2d4u4.0+/ubuntu focal main'
-# RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-key '6E12762B81063D17BDDD3142F142A4D99F16EB04'
-# RUN add-apt-repository 'deb http://http.us.debian.org/debian sid main non-free contrib'
-# RUN add-apt-repository 'deb http://archive.ubuntu.com/ubuntu focal universe'
-# RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-key '871920D1991BC93C'
-
-# RUN export DEBIAN_FRONTEND=noninteractive; apt-get -y update \
-#     && apt-get upgrade -y \
-#     && apt-get install -y \
-#     git \
-#     wget \
-#     make \
-#     pandoc \
-#     qpdf \
-#     sqlite3 \
-#     libcurl4-openssl-dev \
-#     libssl-dev \
-#     r-base \
-#     r-base-dev \
-#     r-recommended \
-#     postgresql-13-plr \
-#     libudunits2-dev \
-#     libgdal-dev \
-#     libgdal26 \
-#     libgeos-dev \
-#     libproj-dev \
-#     liblwgeom-dev \
-#     libgcc-s1 \
-#     libogdi-dev \
-#     r-cran-sf \
-#     r-cran-rgdal \
-#     r-cran-gstat \
-#     r-cran-raster \
-#     r-cran-data.table \
-    
-# RUN apt-get install -y texinfo \
-#        texlive-base \
-#        texlive-extra-utils \
-#        texlive-fonts-extra \
-#        texlive-fonts-recommended \
-#        texlive-generic-recommended \
-#        texlive-latex-base \
-#        texlive-latex-extra \
-#        texlive-latex-recommended
-
-# RUN R -e "install.packages(c('gstat', 'raster', 'data.table'), dependencies=TRUE, repos=c('http://cran.rstudio.com/', 'https://cran.r-project.org/'), Ncpus=$numcpu)"
-# RUN R -e "install.packages(c('sf'), dependencies=TRUE, repos=c('https://cloud.r-project.org'))"
-# RUN git clone   https://github.com/r-spatial/sf.git
-# RUN R CMD build --no-build-vignettes sf
-# RUN R CMD INSTALL sf_*tar.gz
-# RUN R CMD check --as-cran sf_*tar.gz
+CMD ["postgres"]

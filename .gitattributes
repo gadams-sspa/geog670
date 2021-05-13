@@ -1,1 +1,4 @@
 ./db/init/create_db.sh eol=lf
+./db/docker-entrypoint.sh eol=lf
+./db/initdb-postgis.sh eol=lf
+./db/update-postgis.sh eol=lf
