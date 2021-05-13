@@ -30,7 +30,7 @@ lookupCoordsURL = r"https://waterdata.usgs.gov/nwis/inventory?search_site_no=<RE
 states = ["md"] # DEBUG and uncomment line above
 full_data = "agency\tsite_no\tdatetime\ttz_cd\tdepth_towl_ft\n" # Header
 cpus = int(mp.cpu_count() * float(os.environ['PARALLEL_FACTOR'])) # Set number of processes for parallel processing
-runeveryx = int(float(os.environ['RUN_INTERVAL_MIN']) * 60000) # Allows for decimal values for minutes. Ex. 7.5
+runeveryx = int(float(os.environ['RUN_INTERVAL_MIN']) * 60) # Allows for decimal values for minutes. Ex. 7.5
 
 def fix_merge(df_merged):
     for col in df_merged.columns:
@@ -141,10 +141,9 @@ def main():
     engine.execute(query) # Insert new data
 
     # Adjust df_contourIntervals to round dates to the nearest quarter hour and drop duplicates.
-    # Wells report in 15 minute intervals at most, but they do not all report at exactly the same time
+    # Wells do not all report at exactly the same time
     df_contourIntervals['datetime'] = pd.to_datetime(df_contourIntervals['datetime'], format=r'%Y-%m-%d %H:%M:%S')
     df_contourIntervals = (df_contourIntervals['datetime'].dt.round('15min')).drop_duplicates()
-
     # Create contours using PL\R
 
     # Append contours to wl_contours table
