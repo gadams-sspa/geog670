@@ -1,5 +1,5 @@
-CREATE OR REPLACE FUNCTION public.test_plr(query text)
- RETURNS SETOF contour
+CREATE OR REPLACE FUNCTION public.plr_contour(query text)
+ RETURNS SETOF gw_contour
  LANGUAGE plr
 AS $function$
 
@@ -65,6 +65,6 @@ contours_dt = as.data.table(contours_sf)
 contours_dt[,geometry:=st_as_text(geometry)]
 
 ## return if you define as an R function
-return(contours_dt[,.(val=z,geom=geometry)])
+return(contours_dt[,.(depth_towl_ft=z,geom=geometry)])
 
 $function$;

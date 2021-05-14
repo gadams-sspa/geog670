@@ -29,6 +29,14 @@ for DB in template_postgis "$POSTGRES_DB"; do
 			CONSTRAINT usgs_wl_data_pkey PRIMARY KEY (uid)
 		);
 
+		CREATE TABLE wl_contour (
+			depth_towl_ft DOUBLE PRECISION,
+			geom geometry(MULTILINESTRING, 4269) NULL
+		);
+
+		-- Type required for the 
+		CREATE TYPE gw_contour AS (depth_towl_ft DOUBLE PRECISION, geom TEXT);
+
 		-- Create Function to build geom
 		CREATE OR REPLACE FUNCTION fn_usgs_wl_data_build_geom()
 		RETURNS trigger
