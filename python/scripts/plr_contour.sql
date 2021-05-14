@@ -33,7 +33,7 @@ vg_model <- vgm(psill = NA, "Sph", range = 5, nugget = 0
 vg_model <- fit.variogram(vex, model=vg_model, fit.method=1,fit.ranges = F)
 
 ## define ouput raster (locations for prediction) USING extent OF continuous US IN EPSG 4269
-out_rast=raster(extent(-125,25,-67,50),ncols=250,nrows=150)
+out_rast=raster(extent(-125,25,-67,50),ncols=250,nrows=200)
 
 
 ## append EVENT field to data.table of XY coords
@@ -68,6 +68,6 @@ contours_dt = as.data.table(contours_sf)
 contours_dt[,geometry:=st_as_text(geometry)]
 
 ## return if you define as an R function
-return(contours_dt[,.(depth_towl_ft=z,geom=geometry)])
+return(contours_dt[,.(depth_towl_ft=level,geom=geometry)])
 
 $function$;
