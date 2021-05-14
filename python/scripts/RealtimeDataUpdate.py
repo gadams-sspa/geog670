@@ -26,10 +26,11 @@ engine = sqlalchemy.create_engine('postgresql://{pgUser}:{pgPass}@{pgServer}:{pg
 # Set relevant constants
 url = r"https://waterservices.usgs.gov/nwis/iv/?format=rdb&stateCd=<REPLACEME>&variable=72019&siteType=GW&siteStatus=active&period=P1D"
 lookupCoordsURL = r"https://waterdata.usgs.gov/nwis/inventory?search_site_no=<REPLACEME>&search_site_no_match_type=exact&group_key=NONE&format=sitefile_output&sitefile_output_format=rdb&column_name=dec_lat_va&column_name=dec_long_va&list_of_search_criteria=search_site_no"
-states = ["al", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy"]
-full_data = "agency\tsite_no\tdatetime\ttz_cd\tdepth_towl_ft\n" # Header
+# states = ["al", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy"]
+states = ["md"]
 cpus = int(mp.cpu_count() * float(os.environ['PARALLEL_FACTOR'])) # Set number of processes for parallel processing
 runeveryx = int(float(os.environ['RUN_INTERVAL_MIN']) * 60) # Allows for decimal values for minutes. Ex. 7.5
+full_data = ""
 
 def fix_merge(df_merged):
     for col in df_merged.columns:
@@ -85,6 +86,8 @@ def parallelize_df(data, func):
     return data
 
 def main():
+    global full_data
+    full_data = "agency\tsite_no\tdatetime\ttz_cd\tdepth_towl_ft\n" # Header
     # Begin requesting and processing, parallelized for speed
     p = mp.Pool(processes=cpus)
     results = []
@@ -115,13 +118,14 @@ def main():
         pass # Must be the first run
 
     # Get rows still missing coords
-    df_missing = df[df.lon.isna()][df.lat.isna()].drop_duplicates(subset='site_no')
+    df_missing = df[df.lon.isna() | df.lat.isna()].drop_duplicates(subset='site_no')
 
-    # Retrieve coordinates for locations missing coords, parallelized so first run isn't so painful
-    df_missing = fix_merge(df_missing.merge(parallelize_df(df_missing['site_no'], get_coords), how='left', on='site_no'))
+    # Retrieve coordinates from USGS for locations missing coords, parallelized so first run isn't so painful. Only if df_missing isn't empty
+    if not df_missing.empty:
+        df_missing = fix_merge(df_missing.merge(parallelize_df(df_missing['site_no'], get_coords), how='left', on='site_no'))
 
-    # Update full dataframe with missing coordinates
-    df = fix_merge(df.merge(df_missing, how='left', on='site_no', validate="many_to_one"))
+        # Update full dataframe with missing coordinates
+        df = fix_merge(df.merge(df_missing, how='left', on='site_no', validate="many_to_one"))
 
     # Insert to DB 
     print("Inserting any new data into DB...")
