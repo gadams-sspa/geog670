@@ -11,7 +11,6 @@ library(sf)
 
 points <- pg.spi.exec(query)
 
-## random locations and values
 x=points$x
 y=points$y
 z=points$z
@@ -19,13 +18,14 @@ z=points$z
 
 ## put locations in a dataframe, then convert it to a SpatialPointsDataFrame
 dframe=data.frame(x=x,y=y,z=z)
+
 coordinates(dframe) = ~x+y
 
 ##calculate experimental variogram
 vex = variogram(z ~ 1,data=dframe)
 
-##define variogram model (spherical, range=1.75, etc.  initial estimates.)
-vg_model <- vgm(psill = NA, "Sph", range = 1.75, nugget = 0
+## random locations and values
+vg_model <- vgm(psill = NA, "Sph", range = 5, nugget = 0
                 ,anis = c(0, 0, 0, 1.0, 1e-5)
 )
 
@@ -33,7 +33,7 @@ vg_model <- vgm(psill = NA, "Sph", range = 1.75, nugget = 0
 vg_model <- fit.variogram(vex, model=vg_model, fit.method=1,fit.ranges = F)
 
 ## define ouput raster (locations for prediction)
-out_rast=raster(extent(dframe),ncols=100,nrows=100)
+out_rast=raster(extent(dframe),ncols=250,nrows=150)
 
 
 ## append EVENT field to data.table of XY coords
@@ -52,8 +52,11 @@ pred_SpatialPixels = predict(gmodel,out_SpatialPixels)
 ## convert SpatialPixelsDataFrame to raster object
 pred_raster = raster(pred_SpatialPixels)
 
+## contour intervals
+contour_levels=seq(from=range(pretty(dframe$z))[1],to=range(pretty(dframe$z))[2],by=20)
+
 ## contour output grid as sp SpatialLines object
-pred_contours_SpatialLines = rasterToContour(pred_raster)
+pred_contours_SpatialLines = rasterToContour(pred_raster,levels=contour_levels)
 
 ## turn sp object into sf for better compatibility, etc.
 contours_sf = st_as_sf(pred_contours_SpatialLines)
