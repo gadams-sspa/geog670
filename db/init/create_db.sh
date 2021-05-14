@@ -31,6 +31,7 @@ for DB in template_postgis "$POSTGRES_DB"; do
 
 		CREATE TABLE wl_contour (
 			depth_towl_ft DOUBLE PRECISION,
+			datetime timestamp NULL,
 			geom geometry(MULTILINESTRING, 4269) NULL
 		);
 
