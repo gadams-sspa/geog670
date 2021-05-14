@@ -32,8 +32,8 @@ vg_model <- vgm(psill = NA, "Sph", range = 5, nugget = 0
 ##fit variogram model (vg_model) to experimental variogram data (vex)
 vg_model <- fit.variogram(vex, model=vg_model, fit.method=1,fit.ranges = F)
 
-## define ouput raster (locations for prediction)
-out_rast=raster(extent(dframe),ncols=250,nrows=150)
+## define ouput raster (locations for prediction) USING extent OF continuous US IN EPSG 4269
+out_rast=raster(extent(-125,25,-67,50),ncols=250,nrows=150)
 
 
 ## append EVENT field to data.table of XY coords
