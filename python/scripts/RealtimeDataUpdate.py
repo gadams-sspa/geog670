@@ -27,7 +27,6 @@ engine = sqlalchemy.create_engine('postgresql://{pgUser}:{pgPass}@{pgServer}:{pg
 url = r"https://waterservices.usgs.gov/nwis/iv/?format=rdb&stateCd=<REPLACEME>&variable=72019&siteType=GW&siteStatus=active&period=P1D"
 lookupCoordsURL = r"https://waterdata.usgs.gov/nwis/inventory?search_site_no=<REPLACEME>&search_site_no_match_type=exact&group_key=NONE&format=sitefile_output&sitefile_output_format=rdb&column_name=dec_lat_va&column_name=dec_long_va&list_of_search_criteria=search_site_no"
 states = ["al", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy"]
-# states = ["md"] # DEBUG and uncomment line above
 full_data = "agency\tsite_no\tdatetime\ttz_cd\tdepth_towl_ft\n" # Header
 cpus = int(mp.cpu_count() * float(os.environ['PARALLEL_FACTOR'])) # Set number of processes for parallel processing
 runeveryx = int(float(os.environ['RUN_INTERVAL_MIN']) * 60) # Allows for decimal values for minutes. Ex. 7.5
@@ -86,22 +85,22 @@ def parallelize_df(data, func):
     return data
 
 def main():
-    # Set date and acquire known site locations 
-    curDate = datetime.today().strftime('%Y-%m-%d')
-    try:
-        knownSites = pd.read_sql("SELECT DISTINCT site_no, ST_X(geom) as lon, ST_Y(geom) as lat from usgs_wl_data" , engine)
-    except: 
-        knownSites = None # first run, table is not initialized -- no site locations are known
-
     # Begin requesting and processing, parallelized for speed
     p = mp.Pool(processes=cpus)
     results = []
-        
+    print("Acquiring data for each state...")    
     for state in states:
         results.append(p.apply_async(mp_get_data, args = [state], callback = log_result))
     p.close()
     p.join()
 
+    # Set date and acquire known site locations 
+    curDate = datetime.today().strftime('%Y-%m-%d')
+    try:
+        print("Checking for known site locations...")
+        knownSites = pd.read_sql("SELECT DISTINCT site_no, ST_X(geom) as lon, ST_Y(geom) as lat from usgs_wl_data" , engine)
+    except: 
+        knownSites = None # first run, table is not initialized -- no site locations are known
 
     df = pd.read_table(StringIO(full_data), sep="\t", index_col=False)
     df['depth_towl_ft'] = pd.to_numeric(df.depth_towl_ft, errors='coerce') # Filter out garbage values in the depth column
@@ -124,8 +123,9 @@ def main():
     # Update full dataframe with missing coordinates
     df = fix_merge(df.merge(df_missing, how='left', on='site_no', validate="many_to_one"))
 
-    # Insert to DB
-    df.to_sql('temptable', con=engine, if_exists='replace', index=False)
+    # Insert to DB 
+    print("Inserting {} rows into DB...".format(str(len(df))))
+    df.to_sql('temptable', con=engine, if_exists='replace', index=False) 
     query = """ INSERT INTO usgs_wl_data (uid, agency, site_no, datetime, tz_cd, depth_towl_ft, lat, lon)
                 SELECT t.uid, t.agency, t.site_no, TO_TIMESTAMP(t.datetime, 'YYYY-MM-DD HH24:MI:SS'), t.tz_cd, t.depth_towl_ft::DECIMAL, t.lat::DECIMAL, t.lon::DECIMAL
                 FROM temptable t
@@ -143,11 +143,15 @@ def main():
     # Adjust df_contourIntervals to round dates to the nearest quarter hour and drop duplicates.
     # Wells do not all report at exactly the same time
     df_contourIntervals['datetime'] = pd.to_datetime(df_contourIntervals['datetime'], format=r'%Y-%m-%d %H:%M:%S')
-    df_contourIntervals = (df_contourIntervals['datetime'].dt.round('15min')).drop_duplicates()
+    df_contourIntervals = (df_contourIntervals['datetime'].dt.round('60min')).drop_duplicates()
 
-    # Create contours using PL\R
+    # Create contours using PL\R if new data
+    if not df_contourIntervals.empty:
+        print("Calculating contours for new data...")
+    
+        # Append contours to wl_contours table
+        print("Inserting new contours to DB...")
 
-    # Append contours to wl_contours table
 
 if __name__ == "__main__":
     time.sleep(10) # Wait for DB container to be on...
