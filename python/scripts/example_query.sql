@@ -1,4 +1,6 @@
-select depth_towl_ft, st_geomfromtext(geom, 4269) AS geom
+SELECT a.depth_towl_ft, ST_Intersection(a.geom, b.geometry) AS geom
+FROM
+(select depth_towl_ft, st_geomfromtext(geom, 4269) AS geom
 from plr_contour(
 	$$select DISTINCT ON (x, y) ST_X(geom) as x, ST_Y(geom) as y, AVG(depth_towl_ft) as z, datetime
 			from public.usgs_wl_data
@@ -9,4 +11,5 @@ from plr_contour(
 ) AND depth_towl_ft IS NOT NULL
 GROUP BY x, y, datetime
 	  $$
-) as geom;
+) as geom) AS a
+CROSS JOIN public.contiguous_us_states_polygon AS b;
