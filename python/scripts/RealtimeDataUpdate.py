@@ -124,7 +124,7 @@ def main():
     df = fix_merge(df.merge(df_missing, how='left', on='site_no', validate="many_to_one"))
 
     # Insert to DB 
-    print("Inserting {} rows into DB...".format(str(len(df))))
+    print("Inserting any new data into DB...")
     df.to_sql('temptable', con=engine, if_exists='replace', index=False) 
     query = """ INSERT INTO usgs_wl_data (uid, agency, site_no, datetime, tz_cd, depth_towl_ft, lat, lon)
                 SELECT t.uid, t.agency, t.site_no, TO_TIMESTAMP(t.datetime, 'YYYY-MM-DD HH24:MI:SS'), t.tz_cd, t.depth_towl_ft::DECIMAL, t.lat::DECIMAL, t.lon::DECIMAL
