@@ -4,6 +4,7 @@ import os
 import time
 import requests
 import pandas as pd
+import geopandas as gpd
 import numpy as np
 import subprocess
 import sqlalchemy
@@ -26,8 +27,7 @@ engine = sqlalchemy.create_engine('postgresql://{pgUser}:{pgPass}@{pgServer}:{pg
 # Set relevant constants
 url = r"https://waterservices.usgs.gov/nwis/iv/?format=rdb&stateCd=<REPLACEME>&variable=72019&siteType=GW&siteStatus=active&period=P1D"
 lookupCoordsURL = r"https://waterdata.usgs.gov/nwis/inventory?search_site_no=<REPLACEME>&search_site_no_match_type=exact&group_key=NONE&format=sitefile_output&sitefile_output_format=rdb&column_name=dec_lat_va&column_name=dec_long_va&list_of_search_criteria=search_site_no"
-# states = ["al", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy"]
-states = ["md"]
+states = ["al", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy"]
 cpus = int(mp.cpu_count() * float(os.environ['PARALLEL_FACTOR'])) # Set number of processes for parallel processing
 runeveryx = int(float(os.environ['RUN_INTERVAL_MIN']) * 60) # Allows for decimal values for minutes. Ex. 7.5
 full_data = ""
@@ -84,6 +84,15 @@ def parallelize_df(data, func):
     pool.close()
     pool.join()
     return data
+
+def load_shp():
+    # Could be easily configured to load in multiple shapefiles...
+    global engine
+    shpFile = "/shapefiles/contiguous_us_states_polygon.shp"
+    tblName = "contiguous_us_states_polygon"
+    gdf = gpd.read_file(shpFile)
+    gdf.to_postgis(name=tblName, con=engine, if_exists='replace', schema='public', index=False)
+
 
 def main():
     global full_data
@@ -159,6 +168,7 @@ def main():
 
 if __name__ == "__main__":
     time.sleep(10) # Wait for DB container to be on...
+    load_shp()
     while True: # Always running, so long as docker container is up.
         main()
         time.sleep(runeveryx)
