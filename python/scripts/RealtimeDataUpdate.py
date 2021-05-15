@@ -30,7 +30,7 @@ lookupCoordsURL = r"https://waterdata.usgs.gov/nwis/inventory?search_site_no=<RE
 states = ["al", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy"]
 cpus = int(mp.cpu_count() * float(os.environ['PARALLEL_FACTOR'])) # Set number of processes for parallel processing
 runeveryx = int(float(os.environ['RUN_INTERVAL_MIN']) * 60) # Allows for decimal values for minutes. Ex. 7.5
-full_data = ""
+full_data = "" # Not constant, but needs to be globally intialized
 
 def fix_merge(df_merged):
     for col in df_merged.columns:
@@ -119,17 +119,20 @@ def contour(times):
                 ) as geom) AS a
                 CROSS JOIN public.contiguous_us_states_polygon AS b;
                 """.format(curTime)
-        cur_df = pd.read_sql(sql, engine)
-        cur_df['datetime'] = curTime
-        ret_list.append(cur_df)
+        try:
+            cur_df = pd.read_sql(sql, engine)
+            cur_df['datetime'] = curTime
+            ret_list.append(cur_df)
+        except:
+            # There are some instances where aggregating to a time with insufficient data results in an error thrown in the R functions.
+            # These situations occur when the most recent time period is not fully available. IE a run starting at 7:53 AM is aggregated to 8:00 AM, but
+            # Most of the data required is in the future. Appending an empty DF, we'll fix it in a later run when enough data is available.
+            ret_list.append(pd.DataFrame([], columns = ['depth_towl_ft', 'datetime', 'geom']))
     if len(ret_list) > 1: # Possible to have only 1 resulting DF.
         return pd.concat(ret_list)
     elif len(ret_list) == 1:
         return ret_list[0]
     else:
-        # There are some instances where aggregating to a time with insufficient data results in an error thrown in the R functions.
-        # These situations occur when the most recent time period is not fully available. IE a run starting at 7:53 AM is aggregated to 8:00 AM, but
-        # Most of the data required is in the future.
         # Return an empty DataFrame, allows it to fail-safe in a lot of places without abusing try/excepts.
         return pd.DataFrame([], columns = ['depth_towl_ft', 'datetime', 'geom'])
 
