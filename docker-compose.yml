@@ -28,6 +28,7 @@ services:
         build: ./python
         volumes:
             - ./python:/python
+            - ./shapefiles:/shapefiles
         environment:
             - PYTHONUNBUFFERED=1
             - POSTGRES_SERVER=db
