@@ -21,7 +21,7 @@ pgPort = os.environ['POSTGRES_PORT']
 pgUser = os.environ['POSTGRES_USER']
 pgPass = os.environ['POSTGRES_PASSWORD']
 pgDB = os.environ['POSTGRES_DB']
-engine = sqlalchemy.create_engine('postgresql://{pgUser}:{pgPass}@{pgServer}:{pgPort}/{db}'.format(
+engine = sqlalchemy.create_engine('postgresql+psycopg2://{pgUser}:{pgPass}@{pgServer}:{pgPort}/{db}'.format(
     pgUser=pgUser, pgPass=pgPass, pgServer=pgServer, pgPort=pgPort, db=pgDB))
 
 # Set relevant constants
@@ -80,7 +80,11 @@ def parallelize_df(data, func):
     global cpus
     data_split = np.array_split(data, cpus)
     pool = mp.Pool(processes=cpus)
-    data = pd.concat(pool.map(func, data_split))
+    results = pool.map(func, data_split)
+    if len(results) > 1: # Possible to have only 1 resulting DF.
+        data = pd.concat(results)
+    else:
+        data = results[0]
     pool.close()
     pool.join()
     return data
@@ -93,16 +97,50 @@ def load_shp():
     gdf = gpd.read_file(shpFile)
     gdf.to_postgis(name=tblName, con=engine, if_exists='replace', schema='public', index=False)
 
+def contour(times):
+    engine = sqlalchemy.create_engine('postgresql+psycopg2://{pgUser}:{pgPass}@{pgServer}:{pgPort}/{db}'.format(
+    pgUser=pgUser, pgPass=pgPass, pgServer=pgServer, pgPort=pgPort, db=pgDB))
+    ret_list = []
+    for curTime in times.tolist():
+        print("Calculating contours for {}".format(str(curTime)))
+        sql = """SELECT a.depth_towl_ft, ST_Multi(ST_Intersection(a.geom, b.geometry)) AS geom
+                FROM
+                (select depth_towl_ft, st_geomfromtext(geom, 4269) AS geom
+                from plr_contour(
+                    $$select DISTINCT ON (x, y) ST_X(geom) as x, ST_Y(geom) as y, AVG(depth_towl_ft) as z, datetime
+                            from public.usgs_wl_data
+                    where 
+                (	   (datetime, datetime)
+                        OVERLAPS 
+                    ( TO_TIMESTAMP('{}', 'YYYY-MM-DD HH24:MI:SS' ), interval '30 minutes' )
+                ) AND depth_towl_ft IS NOT NULL
+                GROUP BY x, y, datetime
+                    $$
+                ) as geom) AS a
+                CROSS JOIN public.contiguous_us_states_polygon AS b;
+                """.format(curTime)
+        cur_df = pd.read_sql(sql, engine)
+        cur_df['datetime'] = curTime
+        ret_list.append(cur_df)
+    if len(ret_list) > 1: # Possible to have only 1 resulting DF.
+        return pd.concat(ret_list)
+    elif len(ret_list) == 1:
+        return ret_list[0]
+    else:
+        # There are some instances where aggregating to a time with insufficient data results in an error thrown in the R functions.
+        # These situations occur when the most recent time period is not fully available. IE a run starting at 7:53 AM is aggregated to 8:00 AM, but
+        # Most of the data required is in the future.
+        # Return an empty DataFrame, allows it to fail-safe in a lot of places without abusing try/excepts.
+        return pd.DataFrame([], columns = ['depth_towl_ft', 'datetime', 'geom'])
 
 def main():
     global full_data
     full_data = "agency\tsite_no\tdatetime\ttz_cd\tdepth_towl_ft\n" # Header
     # Begin requesting and processing, parallelized for speed
     p = mp.Pool(processes=cpus)
-    results = []
     print("Acquiring data for each state...")    
     for state in states:
-        results.append(p.apply_async(mp_get_data, args = [state], callback = log_result))
+        p.apply_async(mp_get_data, args = [state], callback = log_result)
     p.close()
     p.join()
 
@@ -161,10 +199,20 @@ def main():
     # Create contours using PL\R if new data
     if not df_contourIntervals.empty:
         print("Calculating contours for new data...")
-    
-        # Append contours to wl_contours table
-        print("Inserting new contours to DB...")
+        contour_df = parallelize_df(df_contourIntervals, contour) # Reusing parallelize_df to run PL\R query in parallel
 
+        # Append contours to wl_contours table
+        print("Deleting and replacing contours in DB...")
+        with engine.begin() as con:
+            timeStr = ", ".join(f"'{w}'" for w in df_contourIntervals.tolist())
+            con.execute(sqlalchemy.text("DELETE FROM wl_contour WHERE TO_CHAR(datetime, 'YYYY-MM-DD HH24:MI:SS') IN ({})".format(timeStr)))
+
+        contour_df.to_sql('wl_contour', con=engine, if_exists='append', index=False)
+        print("Inserted new contours to DB")
+    
+    # Cleanup temp table
+    with engine.begin() as con:
+        con.execute(sqlalchemy.text("DROP TABLE temptable"))
 
 if __name__ == "__main__":
     time.sleep(10) # Wait for DB container to be on...
