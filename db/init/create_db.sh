@@ -1,4 +1,5 @@
 #!/bin/sh
+# Author: Glen Adams
 
 set -e
 
